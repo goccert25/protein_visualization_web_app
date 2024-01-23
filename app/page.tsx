@@ -1,112 +1,202 @@
-import Image from 'next/image'
+'use client'
+
+import React, { Fragment, useState, useRef } from 'react'
+import chroma from 'chroma-js'
+
+import Molstar from './Molstar'
+
+import { MultiValue, SingleValue, StylesConfig, components } from 'react-select'
+import AsyncSelect from 'react-select/async'
+import { useLazyQuery, gql } from "@apollo/client";
+
+const MULTI_TITLE_QUERY = gql`
+  query Entries ($ids: [String!]!) {
+    entries(entry_ids:$ids){
+      struct {
+          title
+      }
+    }
+  }
+`;
+
+type ProteinOption = {
+  value: string,
+  label: string
+};
+
+const colourStyles: StylesConfig<ProteinOption, true> = {
+  control: (styles) => ({ ...styles, backgroundColor: 'white' }),
+  option: (styles, { data, isDisabled, isFocused, isSelected }) => {
+    const color = chroma('black');
+    return {
+      ...styles,
+      backgroundColor: isFocused
+        ? color.alpha(0.1).css()
+        : "white",
+      color: isSelected
+        ? "black"
+        : color.alpha(0.5).css()
+    };
+  },
+};
+
+function SingleValue(props: any) {
+  const { children, ...rest } = props;
+  const { selectProps } = props;
+  if (selectProps.menuIsOpen) return <Fragment></Fragment>;
+  return <components.SingleValue {...rest}>{children}</components.SingleValue>;
+}
 
 export default function Home() {
+  const [pdbId, setPdbId] = useState("")
+  const [description, setDescription] = useState("N/A")
+  const [rendering, setRendering] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+
+  const [getTitles, { loading, error }] = useLazyQuery(MULTI_TITLE_QUERY)
+
+  function onNewSelect(eventRaw: SingleValue<ProteinOption> | MultiValue<ProteinOption>): void {
+    let event = eventRaw as SingleValue<ProteinOption>
+    if (event!.value != pdbId) {
+      setDescription(event!.label)
+      setPdbId(event!.value)
+      setRendering(true)
+    }
+  }
+
+  const onLoad = () => {
+    setRendering(false)
+  }
+
+  const loadOptions = (
+    inputValue: string,
+    callback: (options: ProteinOption[]) => void
+  ) => {
+    if (inputValue === "") return;
+    // Define the search query
+    const searchQuery = {
+      "query": {
+        "type": "group",
+        "nodes": [
+          {
+            "type": "group",
+            "nodes": [
+              {
+                "type": "terminal",
+                "service": "text",
+                "parameters": {
+                  "attribute": "rcsb_entry_info.structure_determination_methodology",
+                  "operator": "exact_match",
+                  "value": "experimental"
+                }
+              },
+              {
+                "type": "terminal",
+                "service": "text",
+                "parameters": {
+                  "attribute": "entity_poly.rcsb_entity_polymer_type",
+                  "value": "Protein",
+                  "operator": "exact_match"
+                }
+              }
+            ],
+            "logical_operator": "and",
+            "label": "text"
+          },
+          {
+            "type": "terminal",
+            "service": "full_text",
+            "parameters": {
+              "value": inputValue
+            }
+          }
+        ],
+        "logical_operator": "and"
+      },
+      "return_type": "entry",
+      "request_options": {
+        "paginate": {
+          "start": 0,
+          "rows": 25
+        },
+        "results_content_type": [
+          "experimental"
+        ],
+        "sort": [
+          {
+            "sort_by": "score",
+            "direction": "desc"
+          }
+        ],
+        "scoring_strategy": "combined"
+      }
+    };
+
+    // Convert the search query to a URL-encoded string
+    const queryString = encodeURIComponent(JSON.stringify(searchQuery));
+
+    // Define the API endpoint
+    const endpoint = `https://search.rcsb.org/rcsbsearch/v2/query?json=${queryString}`;
+
+    const graphqlCallbackGenerator = (raw_ids: string[], callback: (options: ProteinOption[]) => void) => {
+      const graphqlCallback = (titles_data: any) => {
+        let options = []
+        for (let i = 0; i < raw_ids.length; i = i + 1) {
+          options.push({ value: raw_ids[i], label: titles_data.entries[i].struct.title })
+        }
+        callback(options)
+      }
+      return graphqlCallback
+    }
+
+    // Fetch data from the API
+    const fetchData = async () => {
+      try {
+        const response = await fetch(endpoint);
+        const data = await response.json();
+        let options = []
+        let raw_ids: string[] = []
+        for (var datum of data.result_set) {
+          options.push({ value: datum.identifier, label: datum.identifier })
+          raw_ids.push(datum.identifier)
+        }
+        getTitles({
+          variables: { ids: raw_ids }, onCompleted: graphqlCallbackGenerator(raw_ids, callback)
+        })
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      }
+    };
+    clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => {
+      fetchData();
+    }, 500)
+    // Call the fetchData function
+  };
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto  lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">app/page.tsx</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            By{' '}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
+    <main>
+      <div className="h-screen flex justify-center">
+        <div className="w-full h-full max-h-[800px] max-w-[800px]">
+          <div className="w-full flex justify-center">
+            <h1 className="text-3xl m-md">Simple Protein Viewer</h1>
+          </div>
+          Protein Search:
+          <AsyncSelect
+            components={{ SingleValue }}
+            styles={colourStyles}
+            loadOptions={loadOptions}
+            onChange={onNewSelect}
+            placeholder="Search"
+            loadingMessage={() => "Loading, may take a few seconds..."} />
+          <div className="text-lg mt-md">Description:</div>
+          <div className="text-lg mb-sm">{description}</div>
+          {rendering && <div className="text-lg mb-sm">Rendering structure...</div>}
+          <Molstar useInterface={false} pdbId={pdbId} onLoad={onLoad} />
+          <div className="text-sm">
+            Protein visualization library from https://molstar.org/
+          </div>
         </div>
-      </div>
-
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700 before:dark:opacity-10 after:dark:from-sky-900 after:dark:via-[#0141ff] after:dark:opacity-40 before:lg:h-[360px] z-[-1]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
-        />
-      </div>
-
-      <div className="mb-32 grid text-center lg:max-w-5xl lg:w-full lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Docs{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
-
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Learn{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Templates{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Explore starter templates for Next.js.
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Deploy{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
       </div>
     </main>
   )
